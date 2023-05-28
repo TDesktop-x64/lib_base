@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "base/platform/linux/base_linux_wayland_integration.h"
 
+#include "base/platform/linux/base_linux_wayland_utilities.h"
 #include "base/platform/base_platform_info.h"
 #include "base/qt_signal_producer.h"
 #include "base/flat_map.h"
@@ -15,65 +16,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
+#include <qpa/qplatformnativeinterface.h>
 #include <qpa/qplatformwindow_p.h>
 #include <wayland-client.h>
 
 using namespace QNativeInterface;
 using namespace QNativeInterface::Private;
+using namespace base::Platform::Wayland;
 
 namespace base {
 namespace Platform {
 namespace {
 
-struct WlRegistryDeleter {
-	void operator()(wl_registry *value) {
-		wl_registry_destroy(value);
-	}
-};
-
-struct IdleInhibitorDeleter {
-	void operator()(zwp_idle_inhibitor_v1 *value) {
-		zwp_idle_inhibitor_v1_destroy(value);
-	}
-};
-
-template <typename T>
-class QtWaylandAutoDestroyer : public T {
-public:
-	QtWaylandAutoDestroyer() = default;
-
-	~QtWaylandAutoDestroyer() {
-		if (!this->isInitialized()) {
-			return;
-		}
-
-		static constexpr auto HasDestroy = requires(const T &t) {
-			t.destroy();
-		};
-
-		if constexpr (HasDestroy) {
-			this->destroy();
-		} else {
-			free(this->object());
-			this->init(nullptr);
-		}
-	}
-};
-
-class XdgExported : public QtWayland::zxdg_exported_v2 {
+class XdgExported : public AutoDestroyer<QtWayland::zxdg_exported_v2> {
 public:
 	XdgExported(
 		struct ::wl_display *display,
 		struct ::zxdg_exported_v2 *object)
-	: zxdg_exported_v2(object) {
+	: AutoDestroyer(object) {
 		wl_display_roundtrip(display);
-	}
-
-	XdgExported(const XdgExported &other) = delete;
-	XdgExported &operator=(const XdgExported &other) = delete;
-
-	~XdgExported() {
-		destroy();
 	}
 
 	[[nodiscard]] QString handle() const {
@@ -92,22 +53,22 @@ private:
 } // namespace
 
 struct WaylandIntegration::Private {
-	std::unique_ptr<wl_registry, WlRegistryDeleter> registry;
-	QtWaylandAutoDestroyer<QtWayland::zxdg_exporter_v2> xdgExporter;
+	std::unique_ptr<wl_registry, RegistryDeleter> registry;
+	AutoDestroyer<QtWayland::zxdg_exporter_v2> xdgExporter;
 	uint32_t xdgExporterName = 0;
-	QtWaylandAutoDestroyer<
-		QtWayland::zwp_idle_inhibit_manager_v1> idleInhibitManager;
+	base::flat_map<wl_surface*, XdgExported> xdgExporteds;
+	AutoDestroyer<QtWayland::zwp_idle_inhibit_manager_v1> idleInhibitManager;
 	uint32_t idleInhibitManagerName = 0;
-	base::flat_map<wl_surface*, std::unique_ptr<XdgExported>> xdgExporteds;
-	base::flat_map<QWindow*, std::unique_ptr<
-		zwp_idle_inhibitor_v1,
-		IdleInhibitorDeleter>> idleInhibitors;
+	base::flat_map<
+		QWindow*,
+		AutoDestroyer<QtWayland::zwp_idle_inhibitor_v1>
+	> idleInhibitors;
 	rpl::lifetime lifetime;
 
-	static const struct wl_registry_listener RegistryListener;
+	static const wl_registry_listener RegistryListener;
 };
 
-const struct wl_registry_listener WaylandIntegration::Private::RegistryListener = {
+const wl_registry_listener WaylandIntegration::Private::RegistryListener = {
 	decltype(wl_registry_listener::global)(+[](
 			Private *data,
 			wl_registry *registry,
@@ -127,12 +88,10 @@ const struct wl_registry_listener WaylandIntegration::Private::RegistryListener 
 			wl_registry *registry,
 			uint32_t name) {
 		if (name == data->xdgExporterName) {
-			free(data->xdgExporter.object());
-			data->xdgExporter.init(nullptr);
+			data->xdgExporter = {};
 			data->xdgExporterName = 0;
 		} else if (name == data->idleInhibitManagerName) {
-			free(data->idleInhibitManager.object());
-			data->idleInhibitManager.init(nullptr);
+			data->idleInhibitManager = {};
 			data->idleInhibitManagerName = 0;
 		}
 	}),
@@ -156,24 +115,6 @@ WaylandIntegration::WaylandIntegration()
 		&Private::RegistryListener,
 		_private.get());
 
-	base::qt_signal_producer(
-		qApp,
-		&QObject::destroyed
-	) | rpl::start_with_next([=] {
-		// too late for standard destructors, just free
-		for (auto it = _private->idleInhibitors.begin()
-			; it != _private->idleInhibitors.cend()
-			; ++it) {
-			free(it->second.release());
-			_private->idleInhibitors.erase(it);
-		}
-		free(_private->idleInhibitManager.object());
-		_private->idleInhibitManager.init(nullptr);
-		free(_private->xdgExporter.object());
-		_private->xdgExporter.init(nullptr);
-		free(_private->registry.release());
-	}, _private->lifetime);
-
 	wl_display_roundtrip(display);
 }
 
@@ -181,8 +122,15 @@ WaylandIntegration::~WaylandIntegration() = default;
 
 WaylandIntegration *WaylandIntegration::Instance() {
 	if (!::Platform::IsWayland()) return nullptr;
-	static WaylandIntegration instance;
-	return &instance;
+	static std::optional<WaylandIntegration> instance(std::in_place);
+	base::qt_signal_producer(
+		QGuiApplication::platformNativeInterface(),
+		&QObject::destroyed
+	) | rpl::start_with_next([&] {
+		instance = std::nullopt;
+	}, instance->_private->lifetime);
+	if (!instance) return nullptr;
+	return &*instance;
 }
 
 QString WaylandIntegration::nativeHandle(QWindow *window) {
@@ -205,12 +153,12 @@ QString WaylandIntegration::nativeHandle(QWindow *window) {
 
 	const auto it = _private->xdgExporteds.find(surface);
 	if (it != _private->xdgExporteds.cend()) {
-		return it->second->handle();
+		return it->second.handle();
 	}
 
 	const auto result = _private->xdgExporteds.emplace(
 		surface,
-		std::make_unique<XdgExported>(
+		XdgExported(
 			display,
 			_private->xdgExporter.export_toplevel(surface)));
 
@@ -224,7 +172,7 @@ QString WaylandIntegration::nativeHandle(QWindow *window) {
 		}
 	}, _private->lifetime);
 
-	return result.first->second->handle();
+	return result.first->second.handle();
 }
 
 QString WaylandIntegration::activationToken() {
