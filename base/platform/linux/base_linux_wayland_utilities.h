@@ -20,14 +20,17 @@ public:
 	AutoDestroyer(const AutoDestroyer &other) = delete;
 	AutoDestroyer &operator=(const AutoDestroyer &other) = delete;
 
-	AutoDestroyer(AutoDestroyer &&other) {
-		*this = std::move(other);
+	AutoDestroyer(AutoDestroyer &&other) : T(static_cast<T&&>(other)) {
+		other._moved = true;
 	}
 
 	AutoDestroyer &operator=(AutoDestroyer &&other) {
-		destroy();
-		static_cast<T&>(*this) = other;
-		other._moved = true;
+		if (this != &other) {
+			destroy();
+			static_cast<T&>(*this) = static_cast<T&&>(other);
+			other._moved = true;
+			_moved = false;
+		}
 		return *this;
 	}
 
@@ -37,7 +40,7 @@ public:
 
 private:
 	void destroy() {
-		if (!this->isInitialized() || _moved) {
+		if (!T::isInitialized() || _moved) {
 			return;
 		}
 
@@ -46,9 +49,9 @@ private:
 		};
 
 		if constexpr (HasDestroy) {
-			static_cast<T*>(this)->destroy();
+			T::destroy();
 		} else {
-			wl_proxy_destroy(reinterpret_cast<wl_proxy*>(this->object()));
+			wl_proxy_destroy(reinterpret_cast<wl_proxy*>(T::object()));
 		}
 	}
 
