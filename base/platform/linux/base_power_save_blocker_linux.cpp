@@ -61,11 +61,11 @@ void PortalPreventAppSuspension(
 		if (!prevent && !requestPath.empty()) {
 			connection->call(
 				requestPath,
-				std::string(XDP::kRequestInterface),
+				XDP::kRequestInterface,
 				"Close",
 				{},
 				{},
-				std::string(XDP::kService));
+				XDP::kService);
 			requestPath = "";
 			return;
 		} else if (!(prevent && requestPath.empty())) {
@@ -86,30 +86,26 @@ void PortalPreventAppSuspension(
 			+ handleToken;
 
 		connection->call(
-			std::string(XDP::kObjectPath),
+			XDP::kObjectPath,
 			"org.freedesktop.portal.Inhibit",
 			"Inhibit",
-			Glib::VariantContainerBase::create_tuple({
-				Glib::Variant<Glib::ustring>::create(
-					XDP::ParentWindowID(window)),
-				Glib::Variant<uint>::create(4), // Suspend
-				Glib::Variant<std::map<
-					Glib::ustring,
-					Glib::VariantBase
-				>>::create({
+			Glib::create_variant(std::tuple{
+				XDP::ParentWindowID(window),
+				uint(4), // Suspend
+				std::map<Glib::ustring, Glib::VariantBase>{
 					{
 						"handle_token",
-						Glib::Variant<Glib::ustring>::create(handleToken)
+						Glib::create_variant(handleToken)
 					},
 					{
 						"reason",
-						Glib::Variant<Glib::ustring>::create(
-							description.toStdString())
+						Glib::create_variant(
+							Glib::ustring(description.toStdString()))
 					},
-				}),
+				},
 			}),
 			{},
-			std::string(XDP::kService));
+			XDP::kService);
 	} catch (...) {
 	}
 }

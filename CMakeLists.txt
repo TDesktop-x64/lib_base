@@ -35,7 +35,6 @@ PRIVATE
     base/platform/linux/base_linux_app_launch_context.h
     base/platform/linux/base_linux_dbus_utilities.cpp
     base/platform/linux/base_linux_dbus_utilities.h
-    base/platform/linux/base_linux_glibmm_helper.h
     base/platform/linux/base_linux_library.cpp
     base/platform/linux/base_linux_library.h
     base/platform/linux/base_linux_wayland_integration.cpp
@@ -118,7 +117,6 @@ PRIVATE
     base/platform/base_platform_info.h
     base/platform/base_platform_last_input.h
     base/platform/base_platform_layout_switch.h
-    base/platform/base_platform_network_reachability.cpp
     base/platform/base_platform_network_reachability.h
     base/platform/base_platform_file_utilities.h
     base/platform/base_platform_power_save_blocker.h

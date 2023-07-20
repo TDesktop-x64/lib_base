@@ -7,6 +7,7 @@
 #include "base/platform/linux/base_file_utilities_linux.h"
 
 #include "base/platform/base_platform_file_utilities.h"
+#include "base/platform/linux/base_linux_xdp_utilities.h"
 #include "base/platform/linux/base_linux_app_launch_context.h"
 #include "base/platform/linux/base_linux_wayland_integration.h"
 #include "base/algorithm.h"
@@ -57,25 +58,22 @@ bool PortalShowInFolder(const QString &filepath) {
 		auto outFdList = Glib::RefPtr<Gio::UnixFDList>();
 
 		connection->call_sync(
-			"/org/freedesktop/portal/desktop",
+			XDP::kObjectPath,
 			"org.freedesktop.portal.OpenURI",
 			"OpenDirectory",
-			Glib::VariantContainerBase::create_tuple({
-				Glib::Variant<Glib::ustring>::create({}),
-				Glib::Variant<int>::create_handle(0),
-				Glib::Variant<std::map<
-					Glib::ustring,
-					Glib::VariantBase
-				>>::create({
+			Glib::create_variant(std::tuple{
+				Glib::ustring(),
+				Glib::DBusHandle(),
+				std::map<Glib::ustring, Glib::VariantBase>{
 					{
 						"activation_token",
-						Glib::Variant<Glib::ustring>::create(activationToken)
+						Glib::create_variant(activationToken)
 					},
-				}),
+				},
 			}),
 			Gio::UnixFDList::create(std::vector<int>{ fd }),
 			outFdList,
-			"org.freedesktop.portal.Desktop");
+			XDP::kService);
 
 		return true;
 	} catch (...) {
@@ -100,11 +98,11 @@ bool DBusShowInFolder(const QString &filepath) {
 			"/org/freedesktop/FileManager1",
 			"org.freedesktop.FileManager1",
 			"ShowItems",
-			Glib::VariantContainerBase::create_tuple({
-				Glib::Variant<std::vector<Glib::ustring>>::create({
+			Glib::create_variant(std::tuple{
+				std::vector<Glib::ustring>{
 					Glib::filename_to_uri(filepath.toStdString())
-				}),
-				Glib::Variant<Glib::ustring>::create(startupId),
+				},
+				startupId,
 			}),
 			"org.freedesktop.FileManager1");
 
@@ -141,21 +139,6 @@ bool ShowInFolder(const QString &filepath) {
 }
 
 QString CurrentExecutablePath(int argc, char *argv[]) {
-	if (qEnvironmentVariableIsSet("APPIMAGE")) {
-		const auto appimagePath = qEnvironmentVariable("APPIMAGE");
-		const auto appimagePathList = appimagePath.split('/');
-
-		if (qEnvironmentVariableIsSet("ARGV0")
-			&& appimagePathList.size() >= 5
-			&& appimagePathList[1] == qstr("run")
-			&& appimagePathList[2] == qstr("user")
-			&& appimagePathList[4] == qstr("appimagelauncherfs")) {
-			return qEnvironmentVariable("ARGV0");
-		}
-
-		return appimagePath;
-	}
-
 	const auto exeLink = QFileInfo(u"/proc/%1/exe"_q.arg(getpid()));
 	if (exeLink.exists() && exeLink.isSymLink()) {
 		return exeLink.canonicalFilePath();
@@ -164,13 +147,13 @@ QString CurrentExecutablePath(int argc, char *argv[]) {
 	// Fallback to the first command line argument.
 	if (argc) {
 		const auto argv0 = QFile::decodeName(argv[0]);
-		if (!argv0.isEmpty() && !QFileInfo::exists(argv0)) {
+		if (!argv0.isEmpty() && !argv0.contains(QLatin1Char('/'))) {
 			const auto argv0InPath = QStandardPaths::findExecutable(argv0);
 			if (!argv0InPath.isEmpty()) {
 				return argv0InPath;
 			}
 		}
-		return argv0;
+		return QFileInfo(argv0).absoluteFilePath();
 	}
 
 	return QString();

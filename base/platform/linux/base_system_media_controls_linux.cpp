@@ -16,11 +16,11 @@
 #include <QtGui/QImage>
 #include <ksandbox.h>
 
-using namespace gi::repository;
-
 namespace base::Platform {
-
 namespace {
+
+using namespace gi::repository;
+namespace GObject = gi::repository::GObject;
 
 // QString to GLib::Variant.
 inline auto Q2V(const QString &s) {
@@ -163,7 +163,6 @@ private:
 
 	struct {
 		Gio::DBusConnection connection;
-		Mpris::ObjectSkeleton object;
 		Gio::DBusObjectManagerServer objectManager;
 		uint ownId = 0;
 	} _dbus;
@@ -184,9 +183,8 @@ SystemMediaControls::Private::Private()
 }) {
 	set_can_quit(true);
 	set_can_raise(!::Platform::IsWayland());
-	set_desktop_entry(
-		QGuiApplication::desktopFileName().chopped(8).toStdString());
-	set_identity(QGuiApplication::desktopFileName().chopped(8).toStdString());
+	set_desktop_entry(QGuiApplication::desktopFileName().toStdString());
+	set_identity(QGuiApplication::desktopFileName().toStdString());
 	player().set_can_control(true);
 	player().set_can_seek(true);
 	player().set_maximum_rate(1.0);
@@ -201,6 +199,7 @@ SystemMediaControls::Private::Private()
 			_commandRequests.fire_copy(
 				EventToCommand(invocation.get_method_name()));
 		});
+		invocation.return_value();
 		return true;
 	};
 	signal_handle_quit().connect(executeCommand);
@@ -213,22 +212,24 @@ SystemMediaControls::Private::Private()
 	player().signal_handle_stop().connect(executeCommand);
 	player().signal_handle_seek().connect([=](
 			Mpris::MediaPlayer2Player,
-			Gio::DBusMethodInvocation,
+			Gio::DBusMethodInvocation invocation,
 			int64 offset) {
 		base::Integration::Instance().enterFromEventLoop([&] {
 			_seekRequests.fire_copy(
 				player().property_position().get() + offset);
 		});
+		player().complete_seek(invocation);
 		return true;
 	});
 	player().signal_handle_set_position().connect([=](
 			Mpris::MediaPlayer2Player,
-			Gio::DBusMethodInvocation,
+			Gio::DBusMethodInvocation invocation,
 			const std::string &trackId,
 			int64 position) {
 		base::Integration::Instance().enterFromEventLoop([&] {
 			_seekRequests.fire_copy(position);
 		});
+		player().complete_set_position(invocation);
 		return true;
 	});
 	player().property_loop_status().signal_notify().connect([=](
@@ -259,11 +260,11 @@ void SystemMediaControls::Private::init() {
 	if (!_dbus.connection || _dbus.ownId) {
 		return;
 	}
-	_dbus.object = Mpris::ObjectSkeleton::new_("/org/mpris/MediaPlayer2");
-	_dbus.object.set_media_player2(*this);
-	_dbus.object.set_media_player2_player(player());
+	auto object = Mpris::ObjectSkeleton::new_("/org/mpris/MediaPlayer2");
+	object.set_media_player2(*this);
+	object.set_media_player2_player(player());
 	_dbus.objectManager = Gio::DBusObjectManagerServer::new_("/org/mpris");
-	_dbus.objectManager.export_(_dbus.object);
+	_dbus.objectManager.export_(object);
 	_dbus.objectManager.set_connection(_dbus.connection);
 	_dbus.ownId = Gio::bus_own_name_on_connection(
 		_dbus.connection,
@@ -281,7 +282,6 @@ void SystemMediaControls::Private::deinit() {
 		_dbus.ownId = 0;
 	}
 	_dbus.objectManager = {};
-	_dbus.object = {};
 }
 
 SystemMediaControls::SystemMediaControls()
