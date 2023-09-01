@@ -47,10 +47,7 @@ bool PortalShowInFolder(const QString &filepath) {
 
 		const auto activationToken = []() -> Glib::ustring {
 			if (const auto integration = WaylandIntegration::Instance()) {
-				if (const auto token = integration->activationToken()
-					; !token.isNull()) {
-					return token.toStdString();
-				}
+				return integration->activationToken().toStdString();
 			}
 			return {};
 		}();
@@ -62,7 +59,7 @@ bool PortalShowInFolder(const QString &filepath) {
 			"org.freedesktop.portal.OpenURI",
 			"OpenDirectory",
 			Glib::create_variant(std::tuple{
-				Glib::ustring(),
+				XDP::ParentWindowID(),
 				Glib::DBusHandle(),
 				std::map<Glib::ustring, Glib::VariantBase>{
 					{
