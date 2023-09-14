@@ -18,6 +18,8 @@
 namespace base::Platform::XCB {
 namespace {
 
+std::weak_ptr<CustomConnection> GlobalCustomConnection;
+
 class TimestampGetter : public QAbstractNativeEventFilter {
 public:
 	TimestampGetter() {
@@ -105,6 +107,14 @@ private:
 };
 
 } // namespace
+
+std::shared_ptr<CustomConnection> SharedConnection() {
+	auto result = GlobalCustomConnection.lock();
+	if (!result) {
+		GlobalCustomConnection = result = std::make_shared<CustomConnection>();
+	}
+	return result;
+}
 
 xcb_connection_t *GetConnectionFromQt() {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 2, 0)
@@ -265,8 +275,8 @@ std::optional<xcb_window_t> GetSupportingWMCheck(
 }
 
 bool IsSupportedByWM(xcb_connection_t *connection, const QString &atomName) {
-	// for inline GetConnectionFromQt use
-	if (!connection) {
+	// for inline GetConnectionFromQt or CustomConnection use
+	if (!connection || xcb_connection_has_error(connection)) {
 		return false;
 	}
 

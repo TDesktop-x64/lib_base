@@ -44,6 +44,8 @@ ReplyPointer<T> MakeReplyPointer(T *reply) {
 	return ReplyPointer<T>(reply);
 }
 
+std::shared_ptr<CustomConnection> SharedConnection();
+
 xcb_connection_t *GetConnectionFromQt();
 
 std::optional<xcb_timestamp_t> GetTimestamp();
@@ -68,5 +70,21 @@ std::optional<xcb_window_t> GetSupportingWMCheck(
 
 // convenient API, checks connection for nullptr
 bool IsSupportedByWM(xcb_connection_t *connection, const QString &atomName);
+
+class Connection {
+public:
+	Connection()
+	: _qtConnection(GetConnectionFromQt())
+	, _customConnection(_qtConnection ? nullptr : SharedConnection()) {
+	}
+
+	[[nodiscard]] operator xcb_connection_t*() const {
+		return _customConnection ? _customConnection->get() : _qtConnection;
+	}
+
+private:
+	xcb_connection_t * const _qtConnection = nullptr;
+	const std::shared_ptr<CustomConnection> _customConnection;
+};
 
 } // namespace base::Platform::XCB

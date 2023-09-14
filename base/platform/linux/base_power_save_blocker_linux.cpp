@@ -39,9 +39,8 @@ void XCBPreventDisplaySleep(bool prevent) {
 
 	base::timer_each(
 		kResetScreenSaverTimeout
-	) | rpl::start_with_next([] {
-		const auto connection = XCB::GetConnectionFromQt();
-		if (!connection) {
+	) | rpl::start_with_next([connection = XCB::Connection()] {
+		if (!connection || xcb_connection_has_error(connection)) {
 			return;
 		}
 		xcb_force_screen_saver(connection, XCB_SCREEN_SAVER_RESET);
@@ -49,16 +48,22 @@ void XCBPreventDisplaySleep(bool prevent) {
 }
 #endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 
-void PortalPreventAppSuspension(
-	bool prevent,
+/* https://flatpak.github.io/xdg-desktop-portal/#gdbus-org.freedesktop.portal.Inhibit
+ * 1: Logout
+ * 2: User Switch
+ * 4: Suspend
+ * 8: Idle
+ */
+void PortalInhibit(
+	Glib::ustring &requestPath,
+	uint flags = 0,
 	const QString &description = {},
 	QPointer<QWindow> window = {}) {
 	try {
 		const auto connection = Gio::DBus::Connection::get_sync(
 			Gio::DBus::BusType::SESSION);
 
-		static Glib::ustring requestPath;
-		if (!prevent && !requestPath.empty()) {
+		if (!requestPath.empty()) {
 			connection->call(
 				requestPath,
 				XDP::kRequestInterface,
@@ -67,8 +72,6 @@ void PortalPreventAppSuspension(
 				{},
 				XDP::kService);
 			requestPath = "";
-			return;
-		} else if (!(prevent && requestPath.empty())) {
 			return;
 		}
 
@@ -91,7 +94,7 @@ void PortalPreventAppSuspension(
 			"Inhibit",
 			Glib::create_variant(std::tuple{
 				XDP::ParentWindowID(window),
-				uint(4), // Suspend
+				flags,
 				std::map<Glib::ustring, Glib::VariantBase>{
 					{
 						"handle_token",
@@ -110,6 +113,28 @@ void PortalPreventAppSuspension(
 	}
 }
 
+void PortalPreventDisplaySleep(
+	bool prevent,
+	const QString &description = {},
+	QPointer<QWindow> window = {}) {
+	static Glib::ustring requestPath;
+	if (prevent && !requestPath.empty()) {
+		return;
+	}
+	PortalInhibit(requestPath, 8 /* Idle */, description, window);
+}
+
+void PortalPreventAppSuspension(
+	bool prevent,
+	const QString &description = {},
+	QPointer<QWindow> window = {}) {
+	static Glib::ustring requestPath;
+	if (prevent && !requestPath.empty()) {
+		return;
+	}
+	PortalInhibit(requestPath, 4 /* Suspend */, description, window);
+}
+
 } // namespace
 
 void BlockPowerSave(
@@ -123,11 +148,11 @@ void BlockPowerSave(
 	case PowerSaveBlockType::PreventDisplaySleep:
 		if (const auto integration = WaylandIntegration::Instance()) {
 			integration->preventDisplaySleep(true, window);
-		} else if (::Platform::IsX11()) {
-#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
-			XCBPreventDisplaySleep(true);
-#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 		}
+#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
+		XCBPreventDisplaySleep(true);
+#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
+		PortalPreventDisplaySleep(true, description, window);
 		break;
 	}
 }
@@ -140,11 +165,11 @@ void UnblockPowerSave(PowerSaveBlockType type, QPointer<QWindow> window) {
 	case PowerSaveBlockType::PreventDisplaySleep:
 		if (const auto integration = WaylandIntegration::Instance()) {
 			integration->preventDisplaySleep(false, window);
-		} else if (::Platform::IsX11()) {
-#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
-			XCBPreventDisplaySleep(false);
-#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 		}
+#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
+		XCBPreventDisplaySleep(false);
+#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
+		PortalPreventDisplaySleep(false);
 		break;
 	}
 }
