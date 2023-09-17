@@ -19,7 +19,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <qwayland-wayland.h>
 #include <qwayland-xdg-activation-v1.h>
-#include <qwayland-xdg-foreign-unstable-v2.h>
 #include <qwayland-idle-inhibit-unstable-v1.h>
 
 using namespace QNativeInterface;
@@ -29,35 +28,6 @@ using namespace base::Platform::Wayland;
 namespace base {
 namespace Platform {
 namespace {
-
-class XdgExported : public AutoDestroyer<QtWayland::zxdg_exported_v2> {
-public:
-	XdgExported(
-		not_null<::wl_display*> display,
-		not_null<::zxdg_exported_v2*> object)
-	: AutoDestroyer(object.get()) {
-		wl_display_roundtrip(display.get());
-	}
-
-	[[nodiscard]] QString handle() const {
-		return _handle;
-	}
-
-protected:
-	void zxdg_exported_v2_handle(const QString &handle) override {
-		_handle = handle;
-	}
-
-private:
-	QString _handle;
-};
-
-class XdgExporter : public Global<QtWayland::zxdg_exporter_v2> {
-public:
-	using Global::Global;
-
-	base::flat_map<wl_surface*, XdgExported> exporteds;
-};
 
 class XdgActivationToken
 	: public AutoDestroyer<QtWayland::xdg_activation_token_v1> {
@@ -101,26 +71,60 @@ class IdleInhibitManager
 public:
 	using Global::Global;
 
-	using Inhibitor = AutoDestroyer<QtWayland::zwp_idle_inhibitor_v1>;
-	base::flat_map<wl_surface*, Inhibitor> inhibitors;
+	class Inhibitor;
+	base::flat_map<QWaylandWindow*, Inhibitor> inhibitors;
+};
+
+class IdleInhibitManager::Inhibitor {
+public:
+	Inhibitor(
+			not_null<IdleInhibitManager*> manager,
+			not_null<QWaylandWindow*> window) {
+		if (const auto surface = window->surface()) {
+			_object = manager->create_inhibitor(surface);
+		}
+
+		// _object stores some garbage in this lambda
+		// and crashes when replacing the value.
+		// Perhaps a memory corruption, needs investigation.
+		/*
+		base::qt_signal_producer(
+			window.get(),
+			&QWaylandWindow::surfaceCreated
+		) | rpl::start_with_next([=] {
+			_object = manager->create_inhibitor(window->surface());
+		}, _lifetime);
+		*/
+
+		base::qt_signal_producer(
+			window.get(),
+			&QWaylandWindow::surfaceDestroyed
+		) | rpl::start_with_next([=] {
+			_object = {};
+		}, _lifetime);
+	}
+
+	[[nodiscard]] rpl::lifetime &lifetime() {
+		return _lifetime;
+	}
+
+private:
+	AutoDestroyer<QtWayland::zwp_idle_inhibitor_v1> _object;
+	rpl::lifetime _lifetime;
 };
 
 } // namespace
 
 struct WaylandIntegration::Private : public AutoDestroyer<QtWayland::wl_registry> {
-	std::optional<XdgExporter> xdgExporter;
 	std::optional<Global<QtWayland::xdg_activation_v1>> xdgActivation;
 	std::optional<IdleInhibitManager> idleInhibitManager;
-	rpl::lifetime lifetime;
 
 protected:
 	void registry_global(
 			uint32_t name,
 			const QString &interface,
 			uint32_t version) override {
-		if (interface == qstr("zxdg_exporter_v2")) {
-			xdgExporter.emplace(object(), name, version);
-		} else if (interface == qstr("xdg_activation_v1")) {
+		if (interface == qstr("xdg_activation_v1")) {
 			xdgActivation.emplace(object(), name, version);
 		} else if (interface == qstr("zwp_idle_inhibit_manager_v1")) {
 			idleInhibitManager.emplace(object(), name, version);
@@ -128,9 +132,7 @@ protected:
 	}
 
 	void registry_global_remove(uint32_t name) override {
-		if (xdgExporter && name == xdgExporter->id()) {
-			xdgExporter = std::nullopt;
-		} else if (xdgActivation && name == xdgActivation->id()) {
+		if (xdgActivation && name == xdgActivation->id()) {
 			xdgActivation = std::nullopt;
 		} else if (idleInhibitManager && name == idleInhibitManager->id()) {
 			idleInhibitManager = std::nullopt;
@@ -165,53 +167,11 @@ WaylandIntegration *WaylandIntegration::Instance() {
 			&QObject::destroyed
 		) | rpl::start_with_next([] {
 			instance = std::nullopt;
-		}, instance->_private->lifetime);
+		}, instance->_private->lifetime());
 		return true;
 	}();
 	if (!instance) return nullptr;
 	return &*instance;
-}
-
-QString WaylandIntegration::nativeHandle(QWindow *window) {
-	if (!_private->xdgExporter) {
-		return {};
-	}
-
-	const auto native = qApp->nativeInterface<QWaylandApplication>();
-	const auto nativeWindow = window->nativeInterface<QWaylandWindow>();
-	if (!native || !nativeWindow) {
-		return {};
-	}
-
-	const auto display = native->display();
-	const auto surface = nativeWindow->surface();
-
-	if (!display || !surface) {
-		return {};
-	}
-
-	const auto it = _private->xdgExporter->exporteds.find(surface);
-	if (it != _private->xdgExporter->exporteds.cend()) {
-		return it->second.handle();
-	}
-
-	const auto result = _private->xdgExporter->exporteds.emplace(
-		surface,
-		XdgExported(
-			display,
-			_private->xdgExporter->export_toplevel(surface)));
-
-	base::qt_signal_producer(
-		nativeWindow,
-		&QWaylandWindow::surfaceDestroyed
-	) | rpl::start_with_next([=] {
-		auto it = _private->xdgExporter->exporteds.find(surface);
-		if (it != _private->xdgExporter->exporteds.cend()) {
-			_private->xdgExporter->exporteds.erase(it);
-		}
-	}, _private->lifetime);
-
-	return result.first->second.handle();
 }
 
 QString WaylandIntegration::activationToken(const QString &appId) {
@@ -257,13 +217,8 @@ void WaylandIntegration::preventDisplaySleep(bool prevent, QWindow *window) {
 		return;
 	}
 
-	const auto surface = native->surface();
-	if (!surface) {
-		return;
-	}
-
 	const auto deleter = [=] {
-		auto it = _private->idleInhibitManager->inhibitors.find(surface);
+		auto it = _private->idleInhibitManager->inhibitors.find(native);
 		if (it != _private->idleInhibitManager->inhibitors.cend()) {
 			_private->idleInhibitManager->inhibitors.erase(it);
 		}
@@ -274,23 +229,18 @@ void WaylandIntegration::preventDisplaySleep(bool prevent, QWindow *window) {
 		return;
 	}
 
-	if (_private->idleInhibitManager->inhibitors.contains(surface)) {
+	if (_private->idleInhibitManager->inhibitors.contains(native)) {
 		return;
 	}
 
-	const auto inhibitor = _private->idleInhibitManager->create_inhibitor(
-		surface);
-
-	if (!inhibitor) {
-		return;
-	}
-
-	_private->idleInhibitManager->inhibitors.emplace(surface, inhibitor);
+	const auto result = _private->idleInhibitManager->inhibitors.emplace(
+		native,
+		IdleInhibitManager::Inhibitor(&*_private->idleInhibitManager, native));
 
 	base::qt_signal_producer(
 		native,
-		&QWaylandWindow::surfaceDestroyed
-	) | rpl::start_with_next(deleter, _private->lifetime);
+		&QObject::destroyed
+	) | rpl::start_with_next(deleter, result.first->second.lifetime());
 }
 
 } // namespace Platform
