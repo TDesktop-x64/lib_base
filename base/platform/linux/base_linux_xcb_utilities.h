@@ -6,17 +6,16 @@
 //
 #pragma once
 
+#include "base/custom_delete.h"
+
 #include <xcb/xcb.h>
 
 namespace base::Platform::XCB {
 
-struct ConnectionDeleter {
-	void operator()(xcb_connection_t *value) {
-		xcb_disconnect(value);
-	}
-};
-
-using ConnectionPointer = std::unique_ptr<xcb_connection_t, ConnectionDeleter>;
+using ConnectionPointer = std::unique_ptr<
+	xcb_connection_t,
+	custom_delete<xcb_disconnect>
+>;
 
 class CustomConnection : public ConnectionPointer {
 public:
@@ -30,14 +29,7 @@ public:
 };
 
 template <typename T>
-struct ReplyDeleter {
-	void operator()(T *value) {
-		free(value);
-	}
-};
-
-template <typename T>
-using ReplyPointer = std::unique_ptr<T, ReplyDeleter<T>>;
+using ReplyPointer = std::unique_ptr<T, custom_delete<free>>;
 
 template <typename T>
 ReplyPointer<T> MakeReplyPointer(T *reply) {
@@ -85,6 +77,24 @@ public:
 private:
 	xcb_connection_t * const _qtConnection = nullptr;
 	const std::shared_ptr<CustomConnection> _customConnection;
+};
+
+template <typename Object, auto constructor, auto destructor>
+class ObjectWithConnection
+	: public std::unique_ptr<Object, custom_delete<destructor>> {
+public:
+	ObjectWithConnection() {
+		if (_connection && !xcb_connection_has_error(_connection)) {
+			this->reset(constructor(_connection));
+		}
+	}
+
+	~ObjectWithConnection() {
+		this->reset(nullptr);
+	}
+
+private:
+	const Connection _connection;
 };
 
 } // namespace base::Platform::XCB
