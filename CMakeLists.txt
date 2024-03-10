@@ -271,7 +271,15 @@ elseif (LINUX)
     )
 
     include(${cmake_helpers_loc}/external/glib/generate_dbus.cmake)
+    generate_dbus(lib_base org.freedesktop. XdgDBus ${src_loc}/base/platform/linux/org.freedesktop.DBus.xml)
+    generate_dbus(lib_base org.freedesktop.portal. XdpInhibit ${third_party_loc}/xdg-desktop-portal/data/org.freedesktop.portal.Inhibit.xml)
+    generate_dbus(lib_base org.freedesktop.portal. XdpOpenURI ${third_party_loc}/xdg-desktop-portal/data/org.freedesktop.portal.OpenURI.xml)
+    generate_dbus(lib_base org.freedesktop.portal. XdpRequest ${third_party_loc}/xdg-desktop-portal/data/org.freedesktop.portal.Request.xml)
+    generate_dbus(lib_base org.freedesktop. XdgFileManager1 ${src_loc}/base/platform/linux/org.freedesktop.FileManager1.xml)
+    generate_dbus(lib_base org.freedesktop. XdgScreenSaver ${src_loc}/base/platform/linux/org.freedesktop.ScreenSaver.xml)
+    generate_dbus(lib_base org.gnome.Mutter. MutterIdleMonitor ${src_loc}/base/platform/linux/org.gnome.Mutter.IdleMonitor.xml)
     generate_dbus(lib_base org.mpris. Mpris ${src_loc}/base/platform/linux/mpris.xml)
+    generate_dbus(lib_base io.snapcraft. Snapcraft ${src_loc}/base/platform/linux/io.snapcraft.Settings.xml)
 
     if (NOT DESKTOP_APP_DISABLE_X11_INTEGRATION)
         target_link_libraries(lib_base
