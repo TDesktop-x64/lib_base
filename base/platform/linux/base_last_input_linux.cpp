@@ -15,7 +15,6 @@
 #include <xcb/screensaver.h>
 #endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 
-#include <xdgscreensaver/xdgscreensaver.hpp>
 #include <mutteridlemonitor/mutteridlemonitor.hpp>
 
 namespace base::Platform {
@@ -35,13 +34,13 @@ std::optional<crl::time> XCBLastUserInputTime() {
 	}
 
 	const auto root = XCB::GetRootWindow(connection);
-	if (!root.has_value()) {
+	if (!root) {
 		return std::nullopt;
 	}
 
 	const auto cookie = xcb_screensaver_query_info(
 		connection,
-		*root);
+		root);
 
 	const auto reply = XCB::MakeReplyPointer(
 		xcb_screensaver_query_info_reply(
@@ -57,42 +56,28 @@ std::optional<crl::time> XCBLastUserInputTime() {
 }
 #endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 
-std::optional<crl::time> FreedesktopDBusLastUserInputTime() {
-	auto interface = XdgScreenSaver::ScreenSaver(
-		XdgScreenSaver::ScreenSaverProxy::new_for_bus_sync(
-			Gio::BusType::SESSION_,
-			Gio::DBusProxyFlags::NONE_,
-			"org.freedesktop.ScreenSaver",
-			"/org/freedesktop/ScreenSaver",
-			nullptr));
-
-	if (!interface) {
-		return std::nullopt;
-	}
-
-	const auto result = interface.call_get_session_idle_time_sync();
-	if (!result) {
-		return std::nullopt;
-	}
-
-	return (crl::now() - static_cast<crl::time>(std::get<1>(*result)));
-}
-
 std::optional<crl::time> MutterDBusLastUserInputTime() {
+	static auto NotSupported = false;
+	if (NotSupported) {
+		return std::nullopt;
+	}
+
 	auto interface = MutterIdleMonitor::IdleMonitor(
 		MutterIdleMonitor::IdleMonitorProxy::new_for_bus_sync(
 			Gio::BusType::SESSION_,
-			Gio::DBusProxyFlags::NONE_,
+			Gio::DBusProxyFlags::DO_NOT_AUTO_START_AT_CONSTRUCTION_,
 			"org.gnome.Mutter.IdleMonitor",
 			"/org/gnome/Mutter/IdleMonitor/Core",
 			nullptr));
 
 	if (!interface) {
+		NotSupported = true;
 		return std::nullopt;
 	}
 
 	const auto result = interface.call_get_idletime_sync();
 	if (!result) {
+		NotSupported = true;
 		return std::nullopt;
 	}
 
@@ -110,11 +95,6 @@ std::optional<crl::time> LastUserInputTime() {
 		}
 	}
 #endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
-
-	const auto freedesktopResult = FreedesktopDBusLastUserInputTime();
-	if (freedesktopResult.has_value()) {
-		return freedesktopResult;
-	}
 
 	const auto mutterResult = MutterDBusLastUserInputTime();
 	if (mutterResult.has_value()) {

@@ -69,8 +69,8 @@ public:
 				connection,
 				false,
 				x_settings_window,
-				*_xsettings_atom,
-				*_xsettings_atom,
+				_xsettings_atom,
+				_xsettings_atom,
 				offset/4,
 				8192);
 
@@ -217,8 +217,8 @@ public:
 
 	}
 
-	const not_null<xcb_connection_t*> connection;
-	xcb_window_t x_settings_window = XCB_WINDOW_NONE;
+	xcb_connection_t * const connection = nullptr;
+	xcb_window_t x_settings_window = XCB_NONE;
 	QMap<QByteArray, PropertyValue> settings;
 	bool initialized = false;
 };
@@ -226,6 +226,9 @@ public:
 
 XSettings::XSettings()
 : _private(std::make_unique<Private>()) {
+	if (!_private->connection)
+		return;
+
 	const auto selection_owner_atom = GetAtom(
 		_private->connection,
 		"_XSETTINGS_S0");
@@ -235,7 +238,7 @@ XSettings::XSettings()
 
 	const auto selection_cookie = xcb_get_selection_owner(
 		_private->connection,
-		*selection_owner_atom);
+		selection_owner_atom);
 
 	const auto selection_result = MakeReplyPointer(
 		xcb_get_selection_owner_reply(
@@ -255,11 +258,15 @@ XSettings::XSettings()
 	const uint32_t event_mask[] = {
 		XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE
 	};
-	xcb_change_window_attributes(
-		_private->connection,
-		_private->x_settings_window,
-		event,
-		event_mask);
+
+	free(
+		xcb_request_check(
+			_private->connection,
+			xcb_change_window_attributes_checked(
+				_private->connection,
+				_private->x_settings_window,
+				event,
+				event_mask)));
 
 	_private->populateSettings(_private->getSettings());
 	_private->initialized = true;
@@ -280,7 +287,7 @@ bool XSettings::initialized() const {
 bool XSettings::nativeEventFilter(
 		const QByteArray &eventType,
 		void *message,
-		NativeEventResult *result) {
+		native_event_filter_result *result) {
 	const auto event = static_cast<xcb_generic_event_t*>(message);
 	const auto response_type = event->response_type & ~0x80;
 	if (response_type != XCB_PROPERTY_NOTIFY)

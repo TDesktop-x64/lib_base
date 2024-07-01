@@ -43,11 +43,17 @@ void XCBPreventDisplaySleep(bool prevent) {
 
 	timer_each(
 		kResetScreenSaverTimeout
-	) | rpl::start_with_next([connection = XCB::Connection()] {
-		if (!connection || xcb_connection_has_error(connection)) {
-			return;
-		}
-		xcb_force_screen_saver(connection, XCB_SCREEN_SAVER_RESET);
+	) | rpl::map([connection = XCB::Connection()] {
+		return connection;
+	}) | rpl::filter([](xcb_connection_t *connection) {
+		return connection && !xcb_connection_has_error(connection);
+	}) | rpl::start_with_next([](xcb_connection_t *connection) {
+		free(
+			xcb_request_check(
+				connection,
+				xcb_force_screen_saver_checked(
+					connection,
+					XCB_SCREEN_SAVER_RESET)));
 	}, lifetime);
 }
 #endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION

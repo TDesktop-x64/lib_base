@@ -22,44 +22,36 @@ std::weak_ptr<CustomConnection> GlobalCustomConnection;
 
 class TimestampGetter : public QAbstractNativeEventFilter {
 public:
-	TimestampGetter() {
-	}
-
-	std::optional<xcb_timestamp_t> get() {
-		_connection = GetConnectionFromQt();
+	TimestampGetter()
+	: _connection(GetConnectionFromQt())
+	, _window(GetRootWindow(_connection))
+	, _atom(GetAtom(_connection, "_DESKTOP_APP_GET_TIMESTAMP")) {
 		if (!_connection) {
-			return std::nullopt;
+			return;
 		}
-
-		const auto window = GetRootWindow(_connection);
-		if (!window.has_value()) {
-			return std::nullopt;
-		}
-
-		const auto atom = GetAtom(_connection, "_DESKTOP_APP_GET_TIMESTAMP");
-		if (!atom.has_value()) {
-			return std::nullopt;
-		}
-
-		_window = *window;
-		_atom = *atom;
 
 		QCoreApplication::instance()->installNativeEventFilter(this);
+	}
 
-		xcb_change_property(
-			_connection,
-			XCB_PROP_MODE_REPLACE,
-			_window,
-			_atom,
-			XCB_ATOM_INTEGER,
-			32,
-			0,
-			nullptr);
+	xcb_timestamp_t get() {
+		if (!_connection) {
+			return _timestamp;
+		}
 
-		xcb_flush(_connection);
-		sync();
+		free(
+			xcb_request_check(
+				_connection,
+				xcb_change_property_checked(
+					_connection,
+					XCB_PROP_MODE_REPLACE,
+					_window,
+					_atom,
+					XCB_ATOM_INTEGER,
+					32,
+					0,
+					nullptr)));
+
 		_loop.exec();
-
 		return _timestamp;
 	}
 
@@ -67,15 +59,18 @@ private:
 	bool nativeEventFilter(
 			const QByteArray &eventType,
 			void *message,
-			NativeEventResult *result) override {
+			native_event_filter_result *result) override {
 		const auto guard = gsl::finally([&] {
-			_connection = GetConnectionFromQt();
-			if (!_connection || xcb_connection_has_error(_connection)) {
+			if (xcb_connection_has_error(_connection)) {
 				_loop.quit();
 			}
 
 			if (_loop.isRunning()) {
-				sync();
+				free(
+					xcb_get_input_focus_reply(
+						_connection,
+						xcb_get_input_focus(_connection),
+						nullptr));
 			}
 		});
 
@@ -94,16 +89,11 @@ private:
 		return false;
 	}
 
-	void sync() {
-		const auto cookie = xcb_get_input_focus(_connection);
-		free(xcb_get_input_focus_reply(_connection, cookie, nullptr));
-	}
-
 	QEventLoop _loop;
 	xcb_connection_t *_connection = nullptr;
-	xcb_window_t _window = XCB_WINDOW_NONE;
-	xcb_atom_t _atom = XCB_ATOM_NONE;
-	std::optional<xcb_timestamp_t> _timestamp;
+	xcb_window_t _window = XCB_NONE;
+	xcb_atom_t _atom = XCB_NONE;
+	xcb_timestamp_t _timestamp = XCB_CURRENT_TIME;
 };
 
 } // namespace
@@ -117,6 +107,7 @@ std::shared_ptr<CustomConnection> SharedConnection() {
 }
 
 xcb_connection_t *GetConnectionFromQt() {
+#if defined QT_FEATURE_xcb && QT_CONFIG(xcb)
 #if QT_VERSION >= QT_VERSION_CHECK(6, 2, 0)
 	using namespace QNativeInterface;
 	const auto native = qApp->nativeInterface<QX11Application>();
@@ -133,26 +124,35 @@ xcb_connection_t *GetConnectionFromQt() {
 	return reinterpret_cast<xcb_connection_t*>(
 		native->nativeResourceForIntegration(QByteArray("connection")));
 #endif // Qt < 6.2.0
+#else // xcb
+	return nullptr;
+#endif // !xcb
 }
 
-std::optional<xcb_timestamp_t> GetTimestamp() {
+xcb_timestamp_t GetTimestamp() {
 	return TimestampGetter().get();
 }
 
-std::optional<xcb_window_t> GetRootWindow(xcb_connection_t *connection) {
+xcb_window_t GetRootWindow(xcb_connection_t *connection) {
+	if (!connection || xcb_connection_has_error(connection)) {
+		return XCB_NONE;
+	}
+
 	const auto screen = xcb_setup_roots_iterator(
 		xcb_get_setup(connection)).data;
 
 	if (!screen) {
-		return std::nullopt;
+		return XCB_NONE;
 	}
 
 	return screen->root;
 }
 
-std::optional<xcb_atom_t> GetAtom(
-		xcb_connection_t *connection,
-		const QString &name) {
+xcb_atom_t GetAtom(xcb_connection_t *connection, const QString &name) {
+	if (!connection || xcb_connection_has_error(connection)) {
+		return XCB_NONE;
+	}
+
 	const auto cookie = xcb_intern_atom(
 		connection,
 		0,
@@ -165,7 +165,7 @@ std::optional<xcb_atom_t> GetAtom(
 		nullptr));
 
 	if (!reply) {
-		return std::nullopt;
+		return XCB_NONE;
 	}
 
 	return reply->atom;
@@ -174,6 +174,10 @@ std::optional<xcb_atom_t> GetAtom(
 bool IsExtensionPresent(
 		xcb_connection_t *connection,
 		xcb_extension_t *ext) {
+	if (!connection || xcb_connection_has_error(connection)) {
+		return false;
+	}
+
 	const auto reply = xcb_get_extension_data(
 		connection,
 		ext);
@@ -190,8 +194,12 @@ std::vector<xcb_atom_t> GetWMSupported(
 		xcb_window_t root) {
 	auto netWmAtoms = std::vector<xcb_atom_t>{};
 
+	if (!connection || xcb_connection_has_error(connection)) {
+		return netWmAtoms;
+	}
+
 	const auto supportedAtom = GetAtom(connection, "_NET_SUPPORTED");
-	if (!supportedAtom.has_value()) {
+	if (!supportedAtom) {
 		return netWmAtoms;
 	}
 
@@ -203,7 +211,7 @@ std::vector<xcb_atom_t> GetWMSupported(
 			connection,
 			false,
 			root,
-			*supportedAtom,
+			supportedAtom,
 			XCB_ATOM_ATOM,
 			offset,
 			1024);
@@ -238,22 +246,26 @@ std::vector<xcb_atom_t> GetWMSupported(
 	return netWmAtoms;
 }
 
-std::optional<xcb_window_t> GetSupportingWMCheck(
+xcb_window_t GetSupportingWMCheck(
 		xcb_connection_t *connection,
 		xcb_window_t root) {
+	if (!connection || xcb_connection_has_error(connection)) {
+		return XCB_NONE;
+	}
+
 	const auto supportingAtom = base::Platform::XCB::GetAtom(
 		connection,
 		"_NET_SUPPORTING_WM_CHECK");
 
-	if (!supportingAtom.has_value()) {
-		return std::nullopt;
+	if (!supportingAtom) {
+		return XCB_NONE;
 	}
 
 	const auto cookie = xcb_get_property(
 		connection,
 		false,
 		root,
-		*supportingAtom,
+		supportingAtom,
 		XCB_ATOM_WINDOW,
 		0,
 		1024);
@@ -264,33 +276,31 @@ std::optional<xcb_window_t> GetSupportingWMCheck(
 		nullptr));
 
 	if (!reply) {
-		return std::nullopt;
+		return XCB_NONE;
 	}
 
 	return (reply->format == 32 && reply->type == XCB_ATOM_WINDOW)
-		? std::optional<xcb_window_t>{
-			*reinterpret_cast<xcb_window_t*>(
-				xcb_get_property_value(reply.get()))
-		} : std::nullopt;
+		? *reinterpret_cast<xcb_window_t*>(
+			xcb_get_property_value(reply.get()))
+		: XCB_NONE;
 }
 
 bool IsSupportedByWM(xcb_connection_t *connection, const QString &atomName) {
-	// for inline GetConnectionFromQt or CustomConnection use
 	if (!connection || xcb_connection_has_error(connection)) {
 		return false;
 	}
 
 	const auto root = GetRootWindow(connection);
-	if (!root.has_value()) {
+	if (!root) {
 		return false;
 	}
 
 	const auto atom = GetAtom(connection, atomName);
-	if (!atom.has_value()) {
+	if (!atom) {
 		return false;
 	}
 
-	return ranges::contains(GetWMSupported(connection, *root), *atom);
+	return ranges::contains(GetWMSupported(connection, root), atom);
 }
 
 } // namespace base::Platform::XCB
