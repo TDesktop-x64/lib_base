@@ -275,7 +275,9 @@ int AutoUpdateVersion() {
 }
 
 QString AutoUpdateKey() {
-	#ifdef Q_OS_WIN64
+	if (IsWindowsARM64()) {
+		return "winarm";
+	} else if (IsWindows64Bit()) {
 		return "win";
 	#else
 		return "win32";
