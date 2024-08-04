@@ -279,9 +279,9 @@ QString AutoUpdateKey() {
 		return "winarm";
 	} else if (IsWindows64Bit()) {
 		return "win";
-	#else
+	} else {
 		return "win32";
-	#endif
+	}
 }
 
 bool IsWindows7OrGreater() {
