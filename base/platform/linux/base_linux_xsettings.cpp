@@ -31,17 +31,27 @@ public:
 		this->value = value;
 		this->last_change_serial = last_change_serial;
 		for (const auto &callback : callback_links)
-			callback.func(connection, name, value, callback.handle);
+			(*callback)(connection, name, value);
 	}
 
-	void addCallback(PropertyChangeFunc func, void *handle) {
-		Callback callback = { func, handle };
-		callback_links.push_back(callback);
+	rpl::lifetime addCallback(PropertyChangeFunc func) {
+		const auto handle = Instance();
+		callback_links.push_back(std::make_unique<PropertyChangeFunc>(func));
+		const auto ptr = callback_links.back().get();
+		return rpl::lifetime([=] {
+			(void)handle;
+			callback_links.erase(
+				ranges::remove(
+					callback_links,
+					ptr,
+					&decltype(callback_links)::value_type::get),
+				callback_links.end());
+		});
 	}
 
 	QVariant value;
 	int last_change_serial = -1;
-	std::vector<Callback> callback_links;
+	std::vector<std::unique_ptr<PropertyChangeFunc>> callback_links;
 
 };
 
@@ -216,7 +226,7 @@ public:
 
 	const Connection connection;
 	xcb_window_t x_settings_window = XCB_NONE;
-	QMap<QByteArray, PropertyValue> settings;
+	base::flat_map<QByteArray, PropertyValue> settings;
 	bool initialized = false;
 	rpl::lifetime lifetime;
 };
@@ -271,7 +281,7 @@ XSettings::XSettings()
 				return;
 
 			_private->populateSettings(_private->getSettings());
-	});
+		});
 
 	if (!event_handler)
 		return;
@@ -294,48 +304,29 @@ XSettings::XSettings()
 
 XSettings::~XSettings() = default;
 
-XSettings &XSettings::Instance() {
-	static XSettings instance;
-	return instance;
+std::shared_ptr<XSettings> XSettings::Instance() {
+	static std::weak_ptr<XSettings> Weak;
+	auto result = Weak.lock();
+	if (!result) {
+		Weak = result = std::shared_ptr<XSettings>(
+			new XSettings,
+			[](XSettings *ptr) { delete ptr; });
+	}
+	return result;
 }
 
 bool XSettings::initialized() const {
 	return _private->initialized;
 }
 
-void XSettings::registerCallbackForProperty(
+rpl::lifetime XSettings::registerCallbackForProperty(
 		const QByteArray &property,
-		PropertyChangeFunc func,
-		void *handle) {
-	_private->settings[property].addCallback(func,handle);
-}
-
-void XSettings::removeCallbackForHandle(
-		const QByteArray &property,
-		void *handle) {
-	auto &callbacks = _private->settings[property].callback_links;
-
-	auto isCallbackForHandle = [handle](const Callback &cb) {
-		return cb.handle == handle;
-	};
-
-	callbacks.erase(
-		std::remove_if(
-			callbacks.begin(),
-			callbacks.end(),
-			isCallbackForHandle),
-		callbacks.end());
-}
-
-void XSettings::removeCallbackForHandle(void *handle) {
-	for (auto it = _private->settings.cbegin()
-		; it != _private->settings.cend(); ++it) {
-		removeCallbackForHandle(it.key(), handle);
-	}
+		PropertyChangeFunc func) {
+	return _private->settings[property].addCallback(func);
 }
 
 QVariant XSettings::setting(const QByteArray &property) const {
-	return _private->settings.value(property).value;
+	return _private->settings[property].value;
 }
 
 } // namespace base::Platform::XCB

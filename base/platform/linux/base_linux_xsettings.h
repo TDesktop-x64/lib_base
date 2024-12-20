@@ -12,24 +12,19 @@ namespace base::Platform::XCB {
 
 class XSettings {
 public:
-	static XSettings &Instance();
-	bool initialized() const;
+	[[nodiscard]] static std::shared_ptr<XSettings> Instance();
+	[[nodiscard]] bool initialized() const;
 
-	QVariant setting(const QByteArray &property) const;
+	[[nodiscard]] QVariant setting(const QByteArray &property) const;
 
-	typedef void (*PropertyChangeFunc)(
+	using PropertyChangeFunc = Fn<void(
 		xcb_connection_t *connection,
 		const QByteArray &name,
-		const QVariant &property,
-		void *handle);
+		const QVariant &property)>;
 
-	void registerCallbackForProperty(
+	[[nodiscard]] rpl::lifetime registerCallbackForProperty(
 		const QByteArray &property,
-		PropertyChangeFunc func,
-		void *handle);
-
-	void removeCallbackForHandle(const QByteArray &property, void *handle);
-	void removeCallbackForHandle(void *handle);
+		PropertyChangeFunc func);
 
 private:
 	XSettings();
@@ -39,11 +34,6 @@ private:
 		Integer,
 		String,
 		Color,
-	};
-
-	struct Callback {
-		PropertyChangeFunc func;
-		void *handle;
 	};
 
 	class PropertyValue;

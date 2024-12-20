@@ -20,8 +20,6 @@
 namespace base::Platform::XCB {
 namespace {
 
-std::weak_ptr<CustomConnection> GlobalCustomConnection;
-
 class QtEventFilter : public QAbstractNativeEventFilter {
 public:
 	QtEventFilter(Fn<void(xcb_generic_event_t*)> handler)
@@ -41,27 +39,17 @@ private:
 	Fn<void(xcb_generic_event_t*)> _handler;
 };
 
-base::flat_map<
-	xcb_connection_t*,
-	std::pair<
-		std::variant<
-			v::null_t,
-			std::unique_ptr<QSocketNotifier>,
-			std::unique_ptr<QtEventFilter>
-		>,
-		std::vector<std::unique_ptr<Fn<void(xcb_generic_event_t*)>>>
-	>
-> EventHandlers;
-
 } // namespace
 
-std::shared_ptr<CustomConnection> SharedConnection() {
-	auto result = GlobalCustomConnection.lock();
+SharedConnection::SharedConnection()
+: std::shared_ptr<CustomConnection>([] {
+	static std::weak_ptr<CustomConnection> Weak;
+	auto result = Weak.lock();
 	if (!result) {
-		GlobalCustomConnection = result = std::make_shared<CustomConnection>();
+		Weak = result = std::make_shared<CustomConnection>();
 	}
 	return result;
-}
+}()) {}
 
 xcb_connection_t *GetConnectionFromQt() {
 #if defined QT_FEATURE_xcb && QT_CONFIG(xcb)
@@ -93,37 +81,33 @@ rpl::lifetime InstallEventHandler(
 		return rpl::lifetime();
 	}
 
+	static base::flat_map<
+		xcb_connection_t*,
+		std::pair<
+			std::variant<
+				v::null_t,
+				std::unique_ptr<QSocketNotifier>,
+				std::unique_ptr<QtEventFilter>
+			>,
+			std::vector<std::unique_ptr<Fn<void(xcb_generic_event_t*)>>>
+		>
+	> EventHandlers;
+
 	auto it = EventHandlers.find(connection);
 	if (it == EventHandlers.cend()) {
-		using EventHandlerVector = decltype(
-			EventHandlers
-		)::value_type::second_type::second_type;
-
+		it = EventHandlers.emplace(connection).first;
 		if (connection == GetConnectionFromQt()) {
-			it = EventHandlers.emplace(
-				connection,
-				std::make_pair(
-					std::make_unique<QtEventFilter>([=](
-							xcb_generic_event_t *event) {
-						const auto it = EventHandlers.find(connection);
-						for (const auto &handler : it->second.second) {
-							(*handler)(event);
-						}
-					}),
-					EventHandlerVector()
-				)
-			).first;
+			it->second.first = std::make_unique<QtEventFilter>([=](
+					xcb_generic_event_t *event) {
+				const auto it = EventHandlers.find(connection);
+				for (const auto &handler : it->second.second) {
+					(*handler)(event);
+				}
+			});
 		} else {
-			it = EventHandlers.emplace(
-				connection,
-				std::make_pair(
-					std::make_unique<QSocketNotifier>(
-						xcb_get_file_descriptor(connection),
-						QSocketNotifier::Read
-					),
-					EventHandlerVector()
-				)
-			).first;
+			it->second.first = std::make_unique<QSocketNotifier>(
+				xcb_get_file_descriptor(connection),
+				QSocketNotifier::Read);
 
 			auto &notifier = *v::get<std::unique_ptr<QSocketNotifier>>(
 				it->second.first);
@@ -437,10 +421,11 @@ rpl::lifetime ChangeWindowEventMask(
 		connection,
 		window);
 
-	const auto windowAttribs = MakeReplyPointer(xcb_get_window_attributes_reply(
-		connection,
-		windowAttribsCookie,
-		nullptr));
+	const auto windowAttribs = MakeReplyPointer(
+		xcb_get_window_attributes_reply(
+			connection,
+			windowAttribsCookie,
+			nullptr));
 	
 	const uint oldMask = windowAttribs ? windowAttribs->your_event_mask : 0;
 
