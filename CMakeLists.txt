@@ -33,6 +33,8 @@ PRIVATE
     base/platform/linux/base_layout_switch_linux.h
     base/platform/linux/base_linux_allocation_tracer.cpp
     base/platform/linux/base_linux_allocation_tracer.h
+    base/platform/linux/base_linux_app_launch_context.cpp
+    base/platform/linux/base_linux_app_launch_context.h
     base/platform/linux/base_linux_dbus_utilities.cpp
     base/platform/linux/base_linux_dbus_utilities.h
     base/platform/linux/base_linux_library.cpp
@@ -206,6 +208,8 @@ PRIVATE
     base/required.h
     base/runtime_composer.cpp
     base/runtime_composer.h
+    base/screen_reader_state.cpp
+    base/screen_reader_state.h
     base/single_instance.cpp
     base/single_instance.h
     base/system_unlock.h
