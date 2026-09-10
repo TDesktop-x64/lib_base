@@ -384,9 +384,7 @@ void SystemMediaControls::clearMetadata() {
 void SystemMediaControls::updateDisplay() {
 	[[MPNowPlayingInfoCenter defaultCenter]
 		performSelectorOnMainThread:@selector(setNowPlayingInfo:)
-		withObject:((_private->enabled && _private->duration())
-			? _private->info
-			: nil)
+		withObject:(_private->enabled ? _private->info : nil)
 		waitUntilDone:false];
 }
 
@@ -398,7 +396,9 @@ auto SystemMediaControls::commandRequests() const
 rpl::producer<float64> SystemMediaControls::seekRequests() const {
 	return (
 		[_private->commandHandler seekRequests]
-	) | rpl::map([=](int position) {
+	) | rpl::filter([=] {
+		return (_private->duration() > 0.);
+	}) | rpl::map([=](int position) {
 		return float64(position) / (_private->duration() * 1000);
 	});
 }
