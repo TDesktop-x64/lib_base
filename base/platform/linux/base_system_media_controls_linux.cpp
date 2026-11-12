@@ -276,6 +276,10 @@ void SystemMediaControls::Private::init() {
 	if (!_dbus.connection || _dbus.ownId) {
 		return;
 	}
+	auto name = QCoreApplication::applicationName().toStdString();
+	if (!name.empty() && name.front() >= '0' && name.front() <= '9') {
+		name.insert(0, "x");
+	}
 	auto object = Mpris::ObjectSkeleton::new_("/org/mpris/MediaPlayer2");
 	object.set_media_player2(*this);
 	object.set_media_player2_player(player());
@@ -288,7 +292,7 @@ void SystemMediaControls::Private::init() {
 			? qEnvironmentVariable("FLATPAK_ID").toStdString()
 			: KSandbox::isSnap()
 			? qEnvironmentVariable("SNAP_INSTANCE_NAME").toStdString()
-			: QCoreApplication::applicationName().toStdString()),
+			: name),
 		Gio::BusNameOwnerFlags::NONE_);
 }
 
