@@ -225,6 +225,7 @@ struct SystemMediaControls::Private {
 	const not_null<CommandHandler*> commandHandler;
 	bool enabled = false;
 	float64 playbackRate = 1.;
+	rpl::event_stream<> updatePositionRequests;
 };
 
 SystemMediaControls::SystemMediaControls()
@@ -276,6 +277,9 @@ void SystemMediaControls::setIsPlayPauseEnabled(bool value) {
 
 void SystemMediaControls::setIsStopEnabled(bool value) {
 	CommandCenter().stopCommand.enabled = value;
+}
+
+void SystemMediaControls::setIsSeekEnabled(bool value) {
 }
 
 void SystemMediaControls::setPlaybackStatus(
@@ -351,6 +355,11 @@ void SystemMediaControls::setPlaybackRate(float64 rate) {
 	}
 }
 
+void SystemMediaControls::setPlaybackRateRange(
+		float64 minimum,
+		float64 maximum) {
+}
+
 void SystemMediaControls::setVolume(float64 volume) {
 }
 
@@ -382,6 +391,8 @@ void SystemMediaControls::clearMetadata() {
 }
 
 void SystemMediaControls::updateDisplay() {
+	// elapsed time is extrapolated from the moment info is published
+	_private->updatePositionRequests.fire({});
 	[[MPNowPlayingInfoCenter defaultCenter]
 		performSelectorOnMainThread:@selector(setNowPlayingInfo:)
 		withObject:(_private->enabled ? _private->info : nil)
@@ -403,12 +414,17 @@ rpl::producer<float64> SystemMediaControls::seekRequests() const {
 	});
 }
 
+auto SystemMediaControls::playbackRateChangeRequests() const
+-> rpl::producer<float64> {
+	return rpl::never<float64>();
+}
+
 rpl::producer<float64> SystemMediaControls::volumeChangeRequests() const {
 	return rpl::never<float64>();
 }
 
 rpl::producer<> SystemMediaControls::updatePositionRequests() const {
-	return rpl::never<>();
+	return _private->updatePositionRequests.events();
 }
 
 bool SystemMediaControls::seekingSupported() const {

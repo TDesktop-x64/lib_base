@@ -294,6 +294,9 @@ void SystemMediaControls::setIsStopEnabled(bool value) {
 	WinRT::Try([&] { _private->controls.IsStopEnabled(value); });
 }
 
+void SystemMediaControls::setIsSeekEnabled(bool value) {
+}
+
 void SystemMediaControls::setPlaybackStatus(
 		SystemMediaControls::PlaybackStatus status) {
 	WinRT::Try([&] {
@@ -370,6 +373,11 @@ void SystemMediaControls::setPosition(int position) {
 void SystemMediaControls::setPlaybackRate(float64 rate) {
 }
 
+void SystemMediaControls::setPlaybackRateRange(
+		float64 minimum,
+		float64 maximum) {
+}
+
 void SystemMediaControls::setVolume(float64 volume) {
 }
 
@@ -407,6 +415,11 @@ auto SystemMediaControls::commandRequests() const
 }
 
 rpl::producer<float64> SystemMediaControls::seekRequests() const {
+	return rpl::never<float64>();
+}
+
+auto SystemMediaControls::playbackRateChangeRequests() const
+-> rpl::producer<float64> {
 	return rpl::never<float64>();
 }
 

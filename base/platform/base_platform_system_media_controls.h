@@ -55,6 +55,7 @@ public:
 	void setIsPreviousEnabled(bool value);
 	void setIsPlayPauseEnabled(bool value);
 	void setIsStopEnabled(bool value);
+	void setIsSeekEnabled(bool value);
 	void setPlaybackStatus(PlaybackStatus status);
 	void setLoopStatus(LoopStatus status);
 	void setShuffle(bool value);
@@ -64,6 +65,7 @@ public:
 	void setDuration(int duration);
 	void setPosition(int position);
 	void setPlaybackRate(float64 rate);
+	void setPlaybackRateRange(float64 minimum, float64 maximum);
 	void setVolume(float64 volume);
 	void clearThumbnail();
 	void clearMetadata();
@@ -71,6 +73,7 @@ public:
 
 	[[nodiscard]] rpl::producer<Command> commandRequests() const;
 	[[nodiscard]] rpl::producer<float64> seekRequests() const;
+	[[nodiscard]] rpl::producer<float64> playbackRateChangeRequests() const;
 	[[nodiscard]] rpl::producer<float64> volumeChangeRequests() const;
 	[[nodiscard]] rpl::producer<> updatePositionRequests() const;
 

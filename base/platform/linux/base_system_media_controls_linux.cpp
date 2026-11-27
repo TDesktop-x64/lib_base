@@ -89,6 +89,7 @@ public:
 	struct PlayerData {
 		int64 duration = 0;
 		bool inSetShuffle = false;
+		bool updatingPosition = false;
 	};
 
 	Private();
@@ -114,6 +115,10 @@ public:
 
 	[[nodiscard]] rpl::producer<int64> seekRequests() const {
 		return _seekRequests.events();
+	}
+
+	[[nodiscard]] rpl::producer<float64> playbackRateChangeRequests() const {
+		return _playbackRateChangeRequests.events();
 	}
 
 	[[nodiscard]] rpl::producer<float64> volumeChangeRequests() const {
@@ -157,18 +162,17 @@ private:
 
 		protected:
 			void get_property(GValue *value) override {
-				// prevent recursion via SystemMediaControls::setPosition
-				if (!_updating) {
-					_updating = true;
+				auto &data = _parent->_parent->_playerData;
+				if (!data.updatingPosition) {
+					data.updatingPosition = true;
 					_parent->_parent->_updatePositionRequests.fire({});
-					_updating = false;
+					data.updatingPosition = false;
 				}
 				gi::property<int64>::get_property(value);
 			}
 
 		private:
 			const not_null<Player*> _parent;
-			bool _updating = false;
 		} _position;
 	};
 
@@ -184,6 +188,7 @@ private:
 
 	rpl::event_stream<Command> _commandRequests;
 	rpl::event_stream<int64> _seekRequests;
+	rpl::event_stream<float64> _playbackRateChangeRequests;
 	rpl::event_stream<float64> _volumeChangeRequests;
 	rpl::event_stream<> _updatePositionRequests;
 };
@@ -199,7 +204,6 @@ SystemMediaControls::Private::Private()
 	set_desktop_entry(QGuiApplication::desktopFileName().toStdString());
 	set_identity(QGuiApplication::desktopFileName().toStdString());
 	player().set_can_control(true);
-	player().set_can_seek(true);
 	player().set_maximum_rate(1.0);
 	player().set_minimum_rate(1.0);
 	player().set_playback_status("Stopped");
@@ -263,6 +267,18 @@ SystemMediaControls::Private::Private()
 			_commandRequests.fire_copy(Command::Shuffle);
 		});
 	});
+	player().property_rate().signal_notify().connect([=](
+			GObject::Object,
+			GObject::ParamSpec) {
+		base::Integration::Instance().enterFromEventLoop([&] {
+			const auto rate = player().get_rate();
+			// the spec asks to pause on rate 0
+			if (rate == 0.) {
+				_commandRequests.fire_copy(Command::Pause);
+			}
+			_playbackRateChangeRequests.fire_copy(rate);
+		});
+	});
 	player().property_volume().signal_notify().connect([=](
 			GObject::Object,
 			GObject::ParamSpec) {
@@ -288,11 +304,13 @@ void SystemMediaControls::Private::init() {
 	_dbus.objectManager.set_connection(_dbus.connection);
 	_dbus.ownId = Gio::bus_own_name_on_connection(
 		_dbus.connection,
-		"org.mpris.MediaPlayer2." + (KSandbox::isFlatpak()
-			? qEnvironmentVariable("FLATPAK_ID").toStdString()
-			: KSandbox::isSnap()
-			? qEnvironmentVariable("SNAP_INSTANCE_NAME").toStdString()
+		std::format("org.mpris.MediaPlayer2.{}{}",
+			KSandbox::isFlatpak()
+				? qEnvironmentVariable("FLATPAK_ID").toStdString()
+				: KSandbox::isSnap()
+				? qEnvironmentVariable("SNAP_INSTANCE_NAME").toStdString()
 			: name),
+			instanceHash.empty() ? "" : std::format("._{}", instanceHash)),
 		Gio::BusNameOwnerFlags::NONE_);
 }
 
@@ -344,6 +362,10 @@ void SystemMediaControls::setIsPlayPauseEnabled(bool value) {
 }
 
 void SystemMediaControls::setIsStopEnabled(bool value) {
+}
+
+void SystemMediaControls::setIsSeekEnabled(bool value) {
+	_private->player().set_can_seek(value);
 }
 
 void SystemMediaControls::setPlaybackStatus(PlaybackStatus status) {
@@ -407,27 +429,22 @@ void SystemMediaControls::setDuration(int duration) {
 }
 
 void SystemMediaControls::setPosition(int position) {
-	// get_position reads the value directly from variable
-	// in the generated C code and doesn't account for the
-	// property override. It's possible to override get_position
-	// but the C++ bindings don't let do this due to
-	// https://gitlab.gnome.org/GNOME/gobject-introspection/-/issues/183
-	//
-	// Once this is fixed, Player should be able to override get_position
-	// and it will be possible to use (get|set)_position here
-	// like other functions do with properties.
-	auto prop = _private->player().property_position();
-	const auto was = prop.get();
-	prop.set(position * 1000LL);
-	const auto playerPosition = prop.get();
-
-	const auto positionDifference = was - playerPosition;
-	if (positionDifference > 1000000 || positionDifference < -1000000) {
-		_private->player().emit_seeked(playerPosition);
+	_private->player().set_position(position * 1000LL);
+	// a reply to updatePositionRequests is not a seek
+	if (!_private->playerData().updatingPosition) {
+		_private->player().emit_seeked(position * 1000LL);
 	}
 }
 
 void SystemMediaControls::setPlaybackRate(float64 rate) {
+	_private->player().set_rate(rate);
+}
+
+void SystemMediaControls::setPlaybackRateRange(
+		float64 minimum,
+		float64 maximum) {
+	_private->player().set_minimum_rate(minimum);
+	_private->player().set_maximum_rate(maximum);
 }
 
 void SystemMediaControls::setVolume(float64 volume) {
@@ -467,6 +484,11 @@ rpl::producer<float64> SystemMediaControls::seekRequests() const {
 	) | rpl::map([=](int64 position) {
 		return float64(position) / _private->playerData().duration;
 	});
+}
+
+auto SystemMediaControls::playbackRateChangeRequests() const
+-> rpl::producer<float64> {
+	return _private->playbackRateChangeRequests();
 }
 
 rpl::producer<float64> SystemMediaControls::volumeChangeRequests() const {
